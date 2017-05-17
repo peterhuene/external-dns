@@ -2,8 +2,9 @@ package provider
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v2"
 	"io/ioutil"
+
+	"gopkg.in/yaml.v2"
 
 	log "github.com/Sirupsen/logrus"
 
@@ -34,6 +35,11 @@ type AzureProvider struct {
 	zonesClient   dns.ZonesClient
 	recordsClient dns.RecordSetsClient
 }
+
+// Maximum number of the pager feature of Records
+const (
+	maxPageElementNum = 100
+)
 
 // NewAzureProvider creates a new Azure provider.
 //
@@ -94,6 +100,20 @@ func NewAzureProvider(configFile string, domainFilter string, dryRun bool) (Prov
 func (p *AzureProvider) Records(_ string) ([]*endpoint.Endpoint, error) {
 	log.Debug("retrieving Azure DNS records.")
 	return nil, fmt.Errorf("not yet implemented")
+}
+
+func (p *AzureProvider) filteredZone() (filteredZone []*dns.Zone, _ error) {
+	var top int32 = maxPageElementNum
+	zones, err := p.zonesClient.List(&top)
+	if err != nil {
+		return nil, err
+	}
+	for _, element := range *zones.Value {
+		if *element.Name == p.domainFilter {
+			filteredZone = append(filteredZone, &element)
+		}
+	}
+	return filteredZone, nil
 }
 
 // ApplyChanges applies the given changes.
