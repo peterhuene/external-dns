@@ -120,7 +120,7 @@ func (p *AzureProvider) Records(_ string) (endpoints []*endpoint.Endpoint, _ err
 		for _, record := range *recordSetList.Value {
 			switch *record.Type {
 			case "A", "CNAME", "TXT":
-				endpoints = append(endpoints, endpoint.NewEndpoint(getDNSName(*record.Name), getTarget(record), *record.Type))
+				endpoints = append(endpoints, endpoint.NewEndpoint(getDNSName(*record.Name, *zone.Name), getTarget(record), *record.Type))
 			default:
 			}
 		}
