@@ -97,9 +97,29 @@ func NewAzureProvider(configFile string, domainFilter string, dryRun bool) (Prov
 // Records gets the current records.
 //
 // Returns the current records or an error if the operation failed.
-func (p *AzureProvider) Records(_ string) ([]*endpoint.Endpoint, error) {
+func (p *AzureProvider) Records(_ string) (endpoints []*endpoint.Endpoint, _ error) {
 	log.Debug("retrieving Azure DNS records.")
-	return nil, fmt.Errorf("not yet implemented")
+	var top int32 = maxPageElementNum
+	zones, err := p.filteredZone()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, zone := range zones {
+		recordSetList, err := p.recordsClient.ListByDNSZone(p.resourceGroup, *zone.Name, &top)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, record := range *recordSetList.Value {
+			switch *record.Type {
+			case "A", "CNAME", "TXT":
+				endpoints = append(endpoints, endpoint.NewEndpoint(*record.Name, getTarget(record), *record.Type))
+			default:
+			}
+		}
+	}
+	return endpoints, nil
 }
 
 func (p *AzureProvider) filteredZone() (filteredZone []*dns.Zone, _ error) {
@@ -114,6 +134,15 @@ func (p *AzureProvider) filteredZone() (filteredZone []*dns.Zone, _ error) {
 		}
 	}
 	return filteredZone, nil
+}
+func getTarget(recordSet dns.RecordSet) string {
+
+	m := map[string]string{
+		"A":     *(*recordSet.RecordSetProperties.ARecords)[0].Ipv4Address,
+		"CNAME": *(*recordSet.RecordSetProperties.CnameRecord).Cname,
+		"TXT":   (*(*recordSet.RecordSetProperties.TxtRecords)[0].Value)[0],
+	}
+	return m[*recordSet.Type]
 }
 
 // ApplyChanges applies the given changes.
