@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"io/ioutil"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 
@@ -12,9 +13,14 @@ import (
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/Azure/go-autorest/autorest/azure"
+	"github.com/Azure/go-autorest/autorest/to"
 
 	"github.com/kubernetes-incubator/external-dns/endpoint"
 	"github.com/kubernetes-incubator/external-dns/plan"
+)
+
+const (
+	azureRecordTTL = 300
 )
 
 type config struct {
@@ -155,6 +161,215 @@ func getTarget(recordSet dns.RecordSet) string {
 //
 // Returns nil if the operation was successful or an error if the operation failed.
 func (p *AzureProvider) ApplyChanges(_ string, changes *plan.Changes) error {
-	log.Debug("applying changes to Azure DNS.")
-	return fmt.Errorf("not yet implemented")
+	zones, err := p.azureZones()
+	if err != nil {
+		return err
+	}
+
+	deleted, updated := mapAzureChanges(zones, changes)
+	p.deleteAzureRecords(deleted)
+	p.updateAzureRecords(updated)
+	return nil
+}
+
+func (p *AzureProvider) azureZones() ([]dns.Zone, error) {
+	log.Debug("retrieving Azure DNS zones.")
+
+	var zones []dns.Zone
+	list, err := p.zonesClient.ListByResourceGroup(p.resourceGroup, nil)
+	if err != nil {
+		return zones, err
+	}
+
+	for list.Value != nil && len(*list.Value) > 0 {
+		for _, zone := range *list.Value {
+			if zone.Name != nil && strings.HasSuffix(*zone.Name, p.domainFilter) {
+				zones = append(zones, zone)
+			}
+		}
+
+		list, err = p.zonesClient.ListNextResults(list)
+		if err != nil {
+			return zones, err
+		}
+	}
+	log.Debugf("found %d Azure DNS zone(s).", len(zones))
+	return zones, nil
+}
+
+type azureChangeMap map[*dns.Zone][]*endpoint.Endpoint
+
+func mapAzureChanges(zones []dns.Zone, changes *plan.Changes) (azureChangeMap, azureChangeMap) {
+	ignored := map[string]bool{}
+	deleted := azureChangeMap{}
+	updated := azureChangeMap{}
+
+	mapChange := func(changeMap azureChangeMap, change *endpoint.Endpoint) {
+		zone := findAzureZone(zones, change.DNSName)
+		if zone == nil {
+			if _, ok := ignored[change.DNSName]; !ok {
+				ignored[change.DNSName] = true
+				log.Infof("ignoring changes to '%s' because a suitable Azure DNS zone was not found.", change.DNSName)
+			}
+			return
+		}
+		// Change unspecified record types to adress
+		if change.RecordType == "" {
+			change.RecordType = "A"
+		}
+		changeMap[zone] = append(changeMap[zone], change)
+	}
+
+	for _, change := range changes.Delete {
+		mapChange(deleted, change)
+	}
+
+	for _, change := range changes.UpdateOld {
+		mapChange(deleted, change)
+	}
+
+	for _, change := range changes.Create {
+		mapChange(updated, change)
+	}
+
+	for _, change := range changes.UpdateNew {
+		mapChange(updated, change)
+	}
+	return deleted, updated
+}
+
+func findAzureZone(zones []dns.Zone, name string) *dns.Zone {
+	var result *dns.Zone
+
+	// Go through every zone looking for the longest name (i.e. most specific) as a matching suffix
+	for _, zone := range zones {
+		if strings.HasSuffix(name, *zone.Name) {
+			if result == nil || len(*zone.Name) > len(*result.Name) {
+				result = &zone
+			}
+		}
+	}
+	return result
+}
+
+func (p *AzureProvider) deleteAzureRecords(deleted azureChangeMap) {
+	// Delete records first
+	for zone, endpoints := range deleted {
+		for _, endpoint := range endpoints {
+			name := recordSetNameForZone(zone, endpoint)
+			if p.dryRun {
+				log.Infof("would delete %s record named '%s' for Azure DNS zone '%s'.", endpoint.RecordType, name, *zone.Name)
+			} else {
+				log.Infof("deleting %s record named '%s' for Azure DNS zone '%s'.", endpoint.RecordType, name, *zone.Name)
+				if _, err := p.recordsClient.Delete(p.resourceGroup, *zone.Name, name, dns.RecordType(endpoint.RecordType), ""); err != nil {
+					log.Errorf(
+						"failed to delete %s record named '%s' for Azure DNS zone '%s': %v",
+						endpoint.RecordType,
+						name,
+						*zone.Name,
+						err,
+					)
+				}
+			}
+		}
+	}
+}
+
+func (p *AzureProvider) updateAzureRecords(updated azureChangeMap) {
+	for zone, endpoints := range updated {
+		for _, endpoint := range endpoints {
+			name := recordSetNameForZone(zone, endpoint)
+			if p.dryRun {
+				log.Infof(
+					"would update %s record named '%s' to '%s' for Azure DNS zone '%s'.",
+					endpoint.RecordType,
+					name,
+					endpoint.Target,
+					*zone.Name,
+				)
+			} else {
+				log.Infof(
+					"updating %s record named '%s' to '%s' for Azure DNS zone '%s'.",
+					endpoint.RecordType,
+					name,
+					endpoint.Target,
+					*zone.Name,
+				)
+			}
+			recordSet, err := newRecordSet(endpoint)
+			if err == nil && !p.dryRun {
+				_, err = p.recordsClient.CreateOrUpdate(
+					p.resourceGroup,
+					*zone.Name,
+					name,
+					dns.RecordType(endpoint.RecordType),
+					recordSet,
+					"",
+					"",
+				)
+			}
+			if err != nil {
+				log.Errorf(
+					"failed to update %s record named '%s' to '%s' for DNS zone '%s': %v",
+					endpoint.RecordType,
+					name,
+					endpoint.Target,
+					*zone.Name,
+					err,
+				)
+			}
+		}
+	}
+}
+
+func recordSetNameForZone(zone *dns.Zone, endpoint *endpoint.Endpoint) string {
+	// Remove the zone from the record set
+	name := endpoint.DNSName
+	name = name[:len(name)-len(*zone.Name)]
+	name = strings.TrimSuffix(name, ".")
+
+	// For root, use @
+	if name == "" {
+		return "@"
+	}
+	return name
+}
+
+func newRecordSet(endpoint *endpoint.Endpoint) (dns.RecordSet, error) {
+	switch dns.RecordType(endpoint.RecordType) {
+	case dns.A:
+		return dns.RecordSet{
+			RecordSetProperties: &dns.RecordSetProperties{
+				TTL: to.Int64Ptr(azureRecordTTL),
+				ARecords: &[]dns.ARecord{
+					{
+						Ipv4Address: to.StringPtr(endpoint.Target),
+					},
+				},
+			},
+		}, nil
+	case dns.CNAME:
+		return dns.RecordSet{
+			RecordSetProperties: &dns.RecordSetProperties{
+				TTL: to.Int64Ptr(azureRecordTTL),
+				CnameRecord: &dns.CnameRecord{
+					Cname: to.StringPtr(endpoint.Target),
+				},
+			},
+		}, nil
+	case dns.TXT:
+		return dns.RecordSet{
+			RecordSetProperties: &dns.RecordSetProperties{
+				TTL: to.Int64Ptr(azureRecordTTL),
+				TxtRecords: &[]dns.TxtRecord{
+					{
+						Value: &[]string{
+							endpoint.Target,
+						},
+					},
+				},
+			},
+		}, nil
+	}
+	return dns.RecordSet{}, fmt.Errorf("unsupported record type '%s'.", endpoint.RecordType)
 }
