@@ -114,12 +114,18 @@ func (p *AzureProvider) Records(_ string) (endpoints []*endpoint.Endpoint, _ err
 		for _, record := range *recordSetList.Value {
 			switch *record.Type {
 			case "A", "CNAME", "TXT":
-				endpoints = append(endpoints, endpoint.NewEndpoint(*record.Name, getTarget(record), *record.Type))
+				endpoints = append(endpoints, endpoint.NewEndpoint(getDNSName(*record.Name), getTarget(record), *record.Type))
 			default:
 			}
 		}
 	}
 	return endpoints, nil
+}
+func getDNSName(recordName, zoneName string) string {
+	if recordName == "@" {
+		return zoneName
+	}
+	return fmt.Sprintf("%s.%s", recordName, zoneName)
 }
 
 func (p *AzureProvider) filteredZone() (filteredZone []*dns.Zone, _ error) {
