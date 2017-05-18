@@ -33,15 +33,15 @@ type config struct {
 	ClientSecret   string `json:"aadClientSecret" yaml:"aadClientSecret"`
 }
 
-// ZoneClient is an interface of dns.ZoneClient for testability
-type ZoneClient interface {
+// ZonesClient is an interface of dns.ZoneClient for testability
+type ZonesClient interface {
 	List(top *int32) (result dns.ZoneListResult, err error)
 	ListByResourceGroup(resourceGroupName string, top *int32) (result dns.ZoneListResult, err error)
 	ListNextResults(lastResults dns.ZoneListResult) (result dns.ZoneListResult, err error)
 }
 
-// RecordClient is an interface of dns.RecordClient for testability
-type RecordClient interface {
+// RecordsClient is an interface of dns.RecordClient for testability
+type RecordsClient interface {
 	ListByDNSZone(resourceGroupName string, zoneName string, top *int32) (result dns.RecordSetListResult, err error)
 	Delete(resourceGroupName string, zoneName string, relativeRecordSetName string, recordType dns.RecordType, ifMatch string) (result autorest.Response, err error)
 	CreateOrUpdate(resourceGroupName string, zoneName string, relativeRecordSetName string, recordType dns.RecordType, parameters dns.RecordSet, ifMatch string, ifNoneMatch string) (result dns.RecordSet, err error)
@@ -52,8 +52,8 @@ type AzureProvider struct {
 	domainFilter  string
 	dryRun        bool
 	resourceGroup string
-	zonesClient   ZoneClient
-	recordsClient RecordClient
+	zonesClient   ZonesClient
+	recordsClient RecordsClient
 }
 
 // Maximum number of the pager feature of Records
