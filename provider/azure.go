@@ -47,6 +47,13 @@ const (
 	maxPageElementNum = 100
 )
 
+// Record Types
+const (
+	RecordTypeA     = "Microsoft.Network/dnszones/A"
+	RecordTypeCNAME = "Microsoft.Network/dnszones/CNAME"
+	RecordTypeTXT   = "Microsoft.Network/dnszones/TXT"
+)
+
 // NewAzureProvider creates a new Azure provider.
 //
 // Returns the provider or an error if a provider could not be created.
@@ -104,7 +111,7 @@ func NewAzureProvider(configFile string, domainFilter string, dryRun bool) (Prov
 //
 // Returns the current records or an error if the operation failed.
 func (p *AzureProvider) Records(_ string) (endpoints []*endpoint.Endpoint, _ error) {
-	log.Debug("retrieving Azure DNS records.")
+	log.Infof("retrieving Azure DNS records by Records method.")
 	var top int32 = maxPageElementNum
 	zones, err := p.filteredZone()
 	if err != nil {
@@ -118,9 +125,16 @@ func (p *AzureProvider) Records(_ string) (endpoints []*endpoint.Endpoint, _ err
 		}
 
 		for _, record := range *recordSetList.Value {
+			recordType := strings.TrimLeft(*record.Type, "Microsoft.Network/dnszones/")
 			switch *record.Type {
-			case "A", "CNAME", "TXT":
-				endpoints = append(endpoints, endpoint.NewEndpoint(getDNSName(*record.Name, *zone.Name), getTarget(record), *record.Type))
+			case RecordTypeA, RecordTypeCNAME, RecordTypeTXT:
+				log.Infof(
+					"Adding an endpoint DNSName:%s target: %s type: %s",
+					*record.Name,
+					getTarget(&record),
+					recordType,
+				)
+				endpoints = append(endpoints, endpoint.NewEndpoint(getDNSName(*record.Name, *zone.Name), getTarget(&record), recordType))
 			default:
 			}
 		}
@@ -147,14 +161,17 @@ func (p *AzureProvider) filteredZone() (filteredZone []*dns.Zone, _ error) {
 	}
 	return filteredZone, nil
 }
-func getTarget(recordSet dns.RecordSet) string {
-
-	m := map[string]string{
-		"A":     *(*recordSet.RecordSetProperties.ARecords)[0].Ipv4Address,
-		"CNAME": *(*recordSet.RecordSetProperties.CnameRecord).Cname,
-		"TXT":   (*(*recordSet.RecordSetProperties.TxtRecords)[0].Value)[0],
+func getTarget(recordSet *dns.RecordSet) string {
+	switch *recordSet.Type {
+	case RecordTypeA:
+		return *(*(*(*recordSet).RecordSetProperties).ARecords)[0].Ipv4Address
+	case RecordTypeCNAME:
+		return *(*(*recordSet).RecordSetProperties).CnameRecord.Cname
+	case RecordTypeTXT:
+		return (*(*(*(*recordSet).RecordSetProperties).TxtRecords)[0].Value)[0]
+	default:
+		return ""
 	}
-	return m[*recordSet.Type]
 }
 
 // ApplyChanges applies the given changes.
