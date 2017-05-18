@@ -33,13 +33,25 @@ type config struct {
 	ClientSecret   string `json:"aadClientSecret" yaml:"aadClientSecret"`
 }
 
+type ZoneClient interface {
+	List(top *int32) (result dns.ZoneListResult, err error)
+	ListByResourceGroup(resourceGroupName string, top *int32) (result dns.ZoneListResult, err error)
+	ListNextResults(lastResults dns.ZoneListResult) (result dns.ZoneListResult, err error)
+}
+
+type RecordClient interface {
+	ListByDNSZone(resourceGroupName string, zoneName string, top *int32) (result dns.RecordSetListResult, err error)
+	Delete(resourceGroupName string, zoneName string, relativeRecordSetName string, recordType dns.RecordType, ifMatch string) (result autorest.Response, err error)
+	CreateOrUpdate(resourceGroupName string, zoneName string, relativeRecordSetName string, recordType dns.RecordType, parameters dns.RecordSet, ifMatch string, ifNoneMatch string) (result dns.RecordSet, err error)
+}
+
 // AzureProvider implements the DNS provider for Microsoft's Azure cloud platform.
 type AzureProvider struct {
 	domainFilter  string
 	dryRun        bool
 	resourceGroup string
-	zonesClient   dns.ZonesClient
-	recordsClient dns.RecordSetsClient
+	zonesClient   ZoneClient
+	recordsClient RecordClient
 }
 
 // Maximum number of the pager feature of Records
