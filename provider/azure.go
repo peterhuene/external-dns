@@ -33,12 +33,14 @@ type config struct {
 	ClientSecret   string `json:"aadClientSecret" yaml:"aadClientSecret"`
 }
 
+// ZoneClient is an interface of dns.ZoneClient for testability
 type ZoneClient interface {
 	List(top *int32) (result dns.ZoneListResult, err error)
 	ListByResourceGroup(resourceGroupName string, top *int32) (result dns.ZoneListResult, err error)
 	ListNextResults(lastResults dns.ZoneListResult) (result dns.ZoneListResult, err error)
 }
 
+// RecordClient is an interface of dns.RecordClient for testability
 type RecordClient interface {
 	ListByDNSZone(resourceGroupName string, zoneName string, top *int32) (result dns.RecordSetListResult, err error)
 	Delete(resourceGroupName string, zoneName string, relativeRecordSetName string, recordType dns.RecordType, ifMatch string) (result autorest.Response, err error)
